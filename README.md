@@ -1,6 +1,7 @@
 # Multimodal Keras Wrapper
 Wrapper for Keras with support to easy multimodal data and models loading and handling.
 
+[![Build Status](https://travis-ci.org/lvapeab/multimodal_keras_wrapper.svg?branch=master)](https://travis-ci.org/lvapeab/multimodal_keras_wrapper) [![Requirements Status](https://requires.io/github/lvapeab/multimodal_keras_wrapper/requirements.svg?branch=master)](https://requires.io/github/lvapeab/multimodal_keras_wrapper/requirements/?branch=master) ![Compatibility](https://img.shields.io/badge/Python-2.7%2F3.7-blue.svg) [![license](https://img.shields.io/github/license/mashape/apistatus.svg)](https://github.com/lvapeab/multimodal_keras_wrapper/blob/master/LICENSE)
 
 ## Documentation
 
@@ -16,14 +17,21 @@ The following dependencies are required for using this library:
  - Keras - [custom fork](https://github.com/MarcBS/keras) or [original version](https://github.com/fchollet/keras)
  - [Coco-caption evaluation package](https://github.com/lvapeab/coco-caption/tree/master/pycocoevalcap/) (Only required to perform evaluation). This package requires `java` (version 1.8.0 or newer).
  - Those specified in the `requirements.txt` file.   
-
+ - The `cupy` package can be used for performing numpy-like operations in the GPU. If not available, the package will fall back to numpy.
+ 
 Only when using NMS for certain localization utilities:
  - [cython](https://pypi.python.org/pypi/Cython/0.25.2) >= 0.23.4
 
 
 ## Installation
 
-In order to install the library you just have to follow these steps:
+Assuming that you have [pip](https://en.wikipedia.org/wiki/Pip_(package_manager)) installed, run:
+
+```
+pip install multimodal-keras-wrapper
+```
+
+Alternatively, if you want to install the library from the source code, you just have to follow these steps:
 
 1) Clone this repository.
 

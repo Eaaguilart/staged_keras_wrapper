@@ -1,23 +1,38 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function
-from six import iteritems
+
+import copy
 import warnings
+
 from keras import backend as K
 from keras.callbacks import Callback as KerasCallback
-from keras_wrapper.utils import decode_predictions_one_hot, decode_predictions_beam_search, decode_predictions, \
-    decode_multilabel
+
 from keras_wrapper.extra import evaluation
 from keras_wrapper.extra.read_write import *
-import copy
+from keras_wrapper.utils import decode_predictions_one_hot, \
+    decode_predictions_beam_search, decode_predictions, \
+    decode_multilabel
+
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%d/%m/%Y %H:%M:%S')
+logger = logging.getLogger(__name__)
 
 
 def checkDefaultParamsBeamSearch(params):
-    required_params = ['model_inputs', 'model_outputs', 'dataset_inputs', 'dataset_outputs']
+    """
+    Checks that the provided parameters to the BeamSearch are compatible with the default ones.
+    :param params: Parameters to check.
+    :return: Checked and updated parameters.
+    """
+
+    required_params = ['model_inputs',
+                       'model_outputs',
+                       'dataset_inputs',
+                       'dataset_outputs']
     default_params = {'max_batch_size': 50,
                       'beam_size': 5,
                       'maxlen': 30,
-                      'normalize': True,
-                      'normalization_type': '(-1)-1',
+                      'normalize': False,
+                      'normalization_type': None,
                       'words_so_far': False,
                       'n_parallel_loaders': 5,
                       'optimized_search': False,
@@ -57,6 +72,9 @@ def checkDefaultParamsBeamSearch(params):
 ###################################################
 
 class EvalPerformance(KerasCallback):
+    """
+    Evaluates a model each N epochs or updates
+    """
     def __init__(self,
                  model,
                  dataset,
@@ -66,13 +84,13 @@ class EvalPerformance(KerasCallback):
                  batch_size,
                  model_name='model',
                  inputs_mapping_eval=None,
-                 outputs_mapping_eval = None,
+                 outputs_mapping_eval=None,
                  gt_pos=None,
                  each_n_epochs=1,
                  max_eval_samples=None,
                  extra_vars=None,
-                 normalize=True,
-                 normalization_type='(-1)-1',
+                 normalize=False,
+                 normalization_type=None,
                  output_types=None,
                  is_text=False,
                  is_multilabel=False,
@@ -100,8 +118,6 @@ class EvalPerformance(KerasCallback):
                  do_plot=True,
                  verbose=1):
         """
-        Evaluates a model each N epochs or updates
-
         :param model: Model_Wrapper object model to evaluate
         :param dataset: instance of the class Dataset in keras_wrapper.dataset
 
@@ -161,7 +177,7 @@ class EvalPerformance(KerasCallback):
         if extra_vars is None:
             extra_vars = dict()
 
-        if type(gt_id) is not list:
+        if not isinstance(gt_id, list):
             gt_id = [gt_id]
 
         self.model_to_eval = model
@@ -222,15 +238,10 @@ class EvalPerformance(KerasCallback):
 
         # Single-output model
         if not self.gt_pos or self.gt_pos == 0:
-            #if not type(self.metric_name) == list:
             self.metric_name = [self.metric_name]
-            #if not type(self.write_type) == list:
             self.write_type = [self.write_type]
-            #if not type(self.index2word_y) == list:
             self.index2word_y = [self.index2word_y]
-            #if not type(self.index2word_x) == list:
             self.index2word_x = [self.index2word_x]
-
             self.min_pred_multilabel = [min_pred_multilabel]
 
             if 0 not in list(self.extra_vars):
@@ -250,12 +261,12 @@ class EvalPerformance(KerasCallback):
 
         else:
             # Convert min_pred_multilabel to list
-            if type(self.min_pred_multilabel) != type(list()):
-                self.min_pred_multilabel = [self.min_pred_multilabel for i in self.gt_pos]
+            if not isinstance(self.min_pred_multilabel, list):
+                self.min_pred_multilabel = [self.min_pred_multilabel for _ in self.gt_pos]
 
         super(EvalPerformance, self).__init__()
 
-    def on_epoch_end(self, epoch, logs={}):
+    def on_epoch_end(self, epoch, logs=None):
         """
         On epoch end, sample and evaluate on the specified datasets.
         :param epoch: Current epoch number
@@ -268,15 +279,25 @@ class EvalPerformance(KerasCallback):
             return
         if epoch < self.start_eval_on_epoch:
             if self.verbose > 0:
-                logging.info('Not evaluating until end of epoch ' + str(self.start_eval_on_epoch))
+                logger.info('Not evaluating until end of epoch ' + str(
+                    self.start_eval_on_epoch))
             return
         elif (epoch - self.start_eval_on_epoch) % self.each_n_epochs != 0:
             if self.verbose > 0:
-                logging.info('Evaluating only every ' + str(self.each_n_epochs) + ' epochs')
+                logger.info(
+                    'Evaluating only every ' + str(self.each_n_epochs) + ' epochs')
             return
         self.evaluate(epoch, counter_name='epoch')
 
-    def on_batch_end(self, n_update, logs={}):
+    def on_batch_end(self, n_update, logs=None):
+        """
+        On (mini)batch end (update), sample and evaluate on the specified datasets.
+        :param n_update: Current update number
+        :param logs:
+        :return:
+        """
+        if logs is None:
+            logs = {}
         self.cum_update += 1  # start by index 1
         if self.eval_on_epochs:
             return
@@ -286,8 +307,17 @@ class EvalPerformance(KerasCallback):
             return
         self.evaluate(self.cum_update, counter_name='iteration', logs=logs)
 
-    def evaluate(self, epoch, counter_name='epoch', logs={}):
-
+    def evaluate(self, epoch, counter_name='epoch', logs=None):
+        """
+        Evaluation function. Works for evaluators external to Keras.
+        Computes the predictions according to the configuration and evaluates them, storing the results.
+        :param epoch: Current epoch or update.
+        :param counter_name: 'epoch' or 'update', string used for logging.
+        :param logs:
+        :return:
+        """
+        if logs is None:
+            logs = {}
         # Change inputs and outputs mappings for evaluation
         self.changeInOutMappings()
 
@@ -298,7 +328,7 @@ class EvalPerformance(KerasCallback):
             # Apply model predictions
             if self.beam_search:
                 params_prediction = {'max_batch_size': self.batch_size,
-                                     'n_parallel_loaders': self.extra_vars['n_parallel_loaders'],
+                                     'n_parallel_loaders': self.extra_vars.get('n_parallel_loaders', 1),
                                      'predict_on_sets': [s],
                                      'beam_batch_size': self.beam_batch_size if
                                      self.beam_batch_size is not None else self.batch_size,
@@ -313,7 +343,7 @@ class EvalPerformance(KerasCallback):
             else:
                 orig_size = self.extra_vars.get('eval_orig_size', False)
                 params_prediction = {'batch_size': self.batch_size,
-                                     'n_parallel_loaders': self.extra_vars.get('n_parallel_loaders', 8),
+                                     'n_parallel_loaders': self.extra_vars.get('n_parallel_loaders', 1),
                                      'predict_on_sets': [s],
                                      'normalize': self.normalize,
                                      'normalization_type': self.normalization_type,
@@ -323,15 +353,18 @@ class EvalPerformance(KerasCallback):
                 # Convert predictions
                 postprocess_fun = None
                 if self.is_3DLabel:
-                    postprocess_fun = [self.ds.convert_3DLabels_to_bboxes, self.extra_vars[s]['references_orig_sizes']]
+                    postprocess_fun = [self.ds.convert_3DLabels_to_bboxes,
+                                       self.extra_vars[s]['references_orig_sizes']]
                 elif orig_size:
-                    postprocess_fun = [self.ds.resize_semantic_output, self.extra_vars[s]['eval_orig_size_id']]
+                    postprocess_fun = [self.ds.resize_semantic_output,
+                                       self.extra_vars[s]['eval_orig_size_id']]
                 predictions_all = \
-                    self.model_to_eval.predictNet(self.ds, params_prediction, postprocess_fun=postprocess_fun)[s]
+                    self.model_to_eval.predictNet(self.ds, params_prediction,
+                                                  postprocess_fun=postprocess_fun)[s]
 
             # Single-output model
             if not self.gt_pos or self.gt_pos == 0 or len(self.gt_pos) == 1:
-                if len(predictions_all)!=2:
+                if len(predictions_all) != 2:
                     predictions_all = [predictions_all]
                 gt_positions = [0]
 
@@ -340,22 +373,23 @@ class EvalPerformance(KerasCallback):
                 gt_positions = self.gt_pos
 
             # Select each output to evaluate separately
-            for gt_pos, type, these_metrics, gt_id, write_type, index2word_y, index2word_x in zip(gt_positions,
-                                                                                                  self.output_types,
-                                                                                                  self.metric_name,
-                                                                                                  self.gt_id,
-                                                                                                  self.write_type,
-                                                                                                  self.index2word_y,
-                                                                                                  self.index2word_x):
+            for gt_pos, type_out, these_metrics, gt_id, write_type, index2word_y, index2word_x in zip(
+                    gt_positions,
+                    self.output_types,
+                    self.metric_name,
+                    self.gt_id,
+                    self.write_type,
+                    self.index2word_y,
+                    self.index2word_x):
 
                 predictions = predictions_all[gt_pos]
 
                 if self.verbose > 0:
                     print('')
-                    logging.info('Prediction output ' + str(gt_pos) + ': ' + str(gt_id) + ' (' + str(type) + ')')
-
+                    logger.info('Prediction output ' + str(gt_pos) + ': ' + str(
+                        gt_id) + ' (' + str(type_out) + ')')
                 # Postprocess outputs of type text
-                if type == 'text':
+                if type_out == 'text':
                     if params_prediction.get('pos_unk', False):
                         samples = predictions[0]
                         alphas = predictions[1]
@@ -379,10 +413,12 @@ class EvalPerformance(KerasCallback):
                         sources = None
                     if self.out_pred_idx is not None:
                         samples = samples[self.out_pred_idx]
+
                     # Convert predictions into sentences
                     if self.beam_search:
                         predictions = decode_predictions_beam_search(samples,
                                                                      index2word_y,
+                                                                     glossary=self.extra_vars.get('glossary', None),
                                                                      alphas=alphas,
                                                                      x_text=sources,
                                                                      heuristic=heuristic,
@@ -391,43 +427,51 @@ class EvalPerformance(KerasCallback):
                     else:
                         probs = predictions
                         predictions = decode_predictions(predictions,
-                                                         1,  # always set temperature to 1
+                                                         1,
+                                                         # always set temperature to 1
                                                          index2word_y,
                                                          self.sampling_type,
                                                          verbose=self.verbose)
-
                     # Apply detokenization function if needed
                     if self.extra_vars.get('apply_detokenization', False):
-                        predictions = map(self.extra_vars['detokenize_f'], predictions)
+                        predictions = list(map(self.extra_vars['detokenize_f'], predictions))
 
                 # Postprocess outputs of type binary
-                elif type == 'binary':
+                elif type_out == 'binary':
                     predictions = decode_multilabel(predictions,
                                                     index2word_y,
-                                                    min_val=self.min_pred_multilabel[gt_pos],
+                                                    min_val=self.min_pred_multilabel[
+                                                        gt_pos],
                                                     verbose=self.verbose)
 
                     # Prepare references
-                    exec ("y_raw = self.ds.Y_" + s + "[gt_id]")
+                    # exec ("y_raw = self.ds.Y_" + s + "[gt_id]")
+                    y_split = getattr(self.ds, 'Y_' + s)
+                    y_raw = y_split[gt_id]
                     self.extra_vars[gt_pos][s]['references'] = self.ds.loadBinary(y_raw, gt_id)
 
                 # Postprocess outputs of type 3DLabel
-                elif type == '3DLabel':
+                elif type_out == '3DLabel':
                     self.extra_vars[gt_pos][s] = dict()
-                    exec ('ref=self.ds.Y_' + s + '["'+gt_id+'"]')
-                    [ref, original_sizes] = self.ds.convert_GT_3DLabels_to_bboxes(ref)
+                    # exec ('ref=self.ds.Y_' + s + '["' + gt_id + '"]')
+                    y_split = getattr(self.ds, 'Y_' + s)
+                    ref = y_split[gt_id]
+                    [ref, original_sizes] = self.ds.convert_GT_3DLabels_to_bboxes(
+                        ref)
                     self.extra_vars[gt_pos][s]['references'] = ref
                     self.extra_vars[gt_pos][s]['references_orig_sizes'] = original_sizes
 
                 # Postprocess outputs of type 3DSemanticLabel
-                elif type == '3DSemanticLabel':
+                elif type_out == '3DSemanticLabel':
                     self.extra_vars[gt_pos]['eval_orig_size'] = self.eval_orig_size
                     self.extra_vars[gt_pos][s] = dict()
-                    exec ('ref=self.ds.Y_' + s + '["' + gt_id + '"]')
+                    # exec ('ref=self.ds.Y_' + s + '["' + gt_id + '"]')
+                    y_split = getattr(self.ds, 'Y_' + s)
+                    ref = y_split[gt_id]
                     if self.eval_orig_size:
                         old_crop = copy.deepcopy(self.ds.img_size_crop)
                         self.ds.img_size_crop = copy.deepcopy(self.ds.img_size)
-                        self.extra_vars[gt_pos][s]['eval_orig_size_id'] = np.array([gt_id]*len(ref))
+                        self.extra_vars[gt_pos][s]['eval_orig_size_id'] = np.array([gt_id] * len(ref))
                     ref = self.ds.load_GT_3DSemanticLabels(ref, gt_id)
                     if self.eval_orig_size:
                         self.ds.img_size_crop = copy.deepcopy(old_crop)
@@ -435,48 +479,55 @@ class EvalPerformance(KerasCallback):
 
                 # Other output data types
                 else:
-                    exec ("self.extra_vars[gt_pos][s]['references'] = self.ds.Y_" + s + "[gt_id]")
-
+                    # exec ("self.extra_vars[gt_pos][s]['references'] = self.ds.Y_" + s + "[gt_id]")
+                    y_split = getattr(self.ds, 'Y_' + s)
+                    self.extra_vars[gt_pos][s]['references'] = y_split[gt_id]
                 # Store predictions
                 if self.write_samples:
                     # Store result
-                    filepath = self.save_path + '/' + s + '_' + counter_name + '_' + str(epoch) + '_output_' + str(
-                        gt_pos) + '.pred'  # results file
+                    filepath = self.save_path + '/' + s + '_' + counter_name + '_' + str(epoch) + '_output_' + str(gt_pos) + '.pred'  # results file
                     if write_type == 'list':
                         list2file(filepath, predictions)
                     elif write_type == 'vqa':
                         try:
-                            exec ('refs = self.ds.Y_' + s + '[gt_id]')
-                        except:
+                            # exec ('refs = self.ds.Y_' + s + '[gt_id]')
+                            y_split = getattr(self.ds, 'Y_' + s)
+                            refs = y_split[gt_id]
+                        except Exception:
                             refs = ['N/A' for _ in range(probs.shape[0])]
                         extra_data_plot = {'reference': refs,
                                            'probs': probs,
                                            'vocab': index2word_y}
-                        list2vqa(filepath, predictions, self.extra_vars[gt_pos][s]['question_ids'],
+                        list2vqa(filepath, predictions,
+                                 self.extra_vars[gt_pos][s]['question_ids'],
                                  extra=extra_data_plot)
                     elif write_type == 'listoflists':
                         listoflists2file(filepath, predictions)
                     elif write_type == 'numpy':
                         numpy2file(filepath, predictions)
                     elif write_type == '3DLabels':
-                        raise NotImplementedError('Write 3DLabels function is not implemented')
+                        raise NotImplementedError(
+                            'Write 3DLabels function is not implemented')
                     elif write_type == '3DSemanticLabel':
-                        folder_path = self.save_path + '/' + s + '_' + counter_name + '_' + str(epoch)  # results folder
-                        numpy2imgs(folder_path, predictions, eval('self.ds.X_' + s + '["' + self.input_id + '"]'),
+                        folder_path = self.save_path + '/' + s + '_' + counter_name + '_' + str(
+                            epoch)  # results folder
+                        numpy2imgs(folder_path,
+                                   predictions,
+                                   eval('self.ds.X_' + s + '["' + self.input_id + '"]'),
                                    self.ds)
                     else:
-                        raise NotImplementedError(
-                            'The store type "' + self.write_type + '" is not implemented.')
+                        raise NotImplementedError('The store type "' + self.write_type + '" is not implemented.')
 
                 # Evaluate on each metric
                 for metric in these_metrics:
                     if self.verbose > 0:
-                        logging.info('Evaluating on metric ' + metric)
+                        logger.info('Evaluating on metric ' + metric)
                     filepath = self.save_path + '/' + s + '.' + metric  # results file
 
                     if s == 'train':
-                        logging.info("WARNING: evaluation results on 'train' split might be incorrect when"
-                                     "applying random image shuffling.")
+                        logger.info(
+                            "WARNING: evaluation results on 'train' split might be incorrect when"
+                            "applying random image shuffling.")
 
                     # Evaluate on the chosen metric
                     metrics = evaluation.select[metric](
@@ -507,7 +558,7 @@ class EvalPerformance(KerasCallback):
                         f.write(line + '\n')
 
                     if self.verbose > 0:
-                        logging.info('Done evaluating on metric ' + metric)
+                        logger.info('Done evaluating on metric ' + metric)
 
         # Store losses
         if logs.get('loss') is not None:
@@ -518,7 +569,8 @@ class EvalPerformance(KerasCallback):
         # Plot results so far
         if self.do_plot:
             if self.metric_name:
-                self.model_to_eval.plot(counter_name, set(all_metrics), self.set_name, upperbound=self.max_plot)
+                self.model_to_eval.plot(counter_name, set(all_metrics),
+                                        self.set_name, upperbound=self.max_plot)
 
         # Save the model
         if self.save_each_evaluation:
@@ -529,9 +581,13 @@ class EvalPerformance(KerasCallback):
         self.recoverInOutMappings()
 
     def changeInOutMappings(self):
+        """
+        Change inputs and outputs mappings for evaluation.
+        :return:
+        """
         self.train_mappings = {'in': self.model_to_eval.inputsMapping,
                                'out': self.model_to_eval.outputsMapping,
-                              }
+                               }
 
         if self.inputs_mapping_eval is not None:
             self.model_to_eval.setInputsMapping(self.inputs_mapping_eval)
@@ -539,6 +595,10 @@ class EvalPerformance(KerasCallback):
             self.model_to_eval.setOutputsMapping(self.outputs_mapping_eval)
 
     def recoverInOutMappings(self):
+        """
+        Change inputs and outputs mappings for training.
+        :return:
+        """
         self.model_to_eval.setInputsMapping(self.train_mappings['in'])
         self.model_to_eval.setOutputsMapping(self.train_mappings['out'])
 
@@ -550,9 +610,11 @@ PrintPerformanceMetricOnEpochEndOrEachNUpdates = EvalPerformance
 # Storing callbacks
 ###################################################
 class StoreModel(KerasCallback):
+    """
+    Saves a model into disk.
+    """
     def __init__(self, model, fun, epochs_for_save, verbose=0):
         """
-        In:
             model - model to save
             fun - function for saving the model
             epochs_for_save - number of epochs before the last save
@@ -564,16 +626,16 @@ class StoreModel(KerasCallback):
         self.verbose = verbose
 
     def on_epoch_end(self, epoch, logs=None):
+        """
+        On epoch end, store the model.
+        :param epoch:
+        :param logs:
+        :return:
+        """
         epoch += 1
         if epoch % self.epochs_for_save == 0:
             print('')
             self.store_function(self.model_to_save, epoch)
-
-            # def on_batch_end(self, n_update, logs={}):
-            #    n_update += 1
-            #    if (n_update % self.epochs_for_save == 0):
-            #        print('')
-            #        self.store_function(self.model_to_save, n_update)
 
 
 StoreModelWeightsOnEpochEnd = StoreModel
@@ -584,12 +646,35 @@ StoreModelWeightsOnEpochEnd = StoreModel
 ###################################################
 
 class Sample(KerasCallback):
-    def __init__(self, model, dataset, gt_id, set_name, n_samples, each_n_updates=10000, extra_vars=None,
-                 is_text=False, index2word_x=None, index2word_y=None, input_text_id=None, print_sources=False,
-                 sampling='max_likelihood', temperature=1.,
-                 beam_search=False, beam_batch_size=None,
-                 batch_size=50, reload_epoch=0, start_sampling_on_epoch=0, is_3DLabel=False,
-                 write_type='list', sampling_type='max_likelihood', out_pred_idx=None, in_pred_idx=None, verbose=1):
+    """
+    Applies the sampling function of a model.
+    """
+    def __init__(self,
+                 model,
+                 dataset,
+                 gt_id,
+                 set_name,
+                 n_samples,
+                 each_n_updates=10000,
+                 extra_vars=None,
+                 is_text=False,
+                 index2word_x=None,
+                 index2word_y=None,
+                 input_text_id=None,
+                 print_sources=False,
+                 sampling='max_likelihood',
+                 temperature=1.,
+                 beam_search=False,
+                 beam_batch_size=None,
+                 batch_size=50,
+                 reload_epoch=0,
+                 start_sampling_on_epoch=0,
+                 is_3DLabel=False,
+                 write_type='list',
+                 sampling_type='max_likelihood',
+                 out_pred_idx=None,
+                 in_pred_idx=None,
+                 verbose=1):
         """
             :param model: model to evaluate
             :param dataset: instance of the class Dataset in keras_wrapper.dataset
@@ -642,10 +727,22 @@ class Sample(KerasCallback):
         self.verbose = verbose
         super(Sample, self).__init__()
 
-    def on_epoch_end(self, n_epoch, logs={}):
+    def on_epoch_end(self, n_epoch, logs=None):
+        """
+        Increment the epoch counter.
+        :param n_epoch:
+        :param logs:
+        :return:
+        """
         self.epoch_count += 1
 
-    def on_batch_end(self, n_update, logs={}):
+    def on_batch_end(self, n_update, logs=None):
+        """
+        On batch end, perform sampling if required.
+        :param n_update:
+        :param logs:
+        :return:
+        """
         self.cum_update += 1
         if self.epoch_count + self.reload_epoch < self.start_sampling_on_epoch:
             return
@@ -661,18 +758,23 @@ class Sample(KerasCallback):
                                      'n_samples': self.n_samples,
                                      'pos_unk': False}
                 params_prediction.update(checkDefaultParamsBeamSearch(self.extra_vars))
-                predictions, truths, sources = self.model_to_eval.predictBeamSearchNet(self.ds, params_prediction)
+                predictions, truths, sources = self.model_to_eval.predictBeamSearchNet(self.ds,
+                                                                                       params_prediction)
             else:
                 params_prediction = {'batch_size': self.batch_size,
                                      'n_parallel_loaders': self.extra_vars['n_parallel_loaders'],
                                      'predict_on_sets': [s],
                                      'n_samples': self.n_samples,
+                                     'verbose': self.verbose,
                                      }
                 # Convert predictions
                 postprocess_fun = None
                 if self.is_3DLabel:
-                    postprocess_fun = [self.ds.convert_3DLabels_to_bboxes, self.extra_vars[s]['references_orig_sizes']]
-                predictions = self.model_to_eval.predictNet(self.ds, params_prediction, postprocess_fun=postprocess_fun)
+                    postprocess_fun = [self.ds.convert_3DLabels_to_bboxes,
+                                       self.extra_vars[s]['references_orig_sizes']]
+                predictions = self.model_to_eval.predictNet(self.ds,
+                                                            params_prediction,
+                                                            postprocess_fun=postprocess_fun)
 
             if self.print_sources:
                 if self.in_pred_idx is not None:
@@ -700,6 +802,7 @@ class Sample(KerasCallback):
                     if self.beam_search:
                         predictions = decode_predictions_beam_search(samples,
                                                                      self.index2word_y,
+                                                                     glossary=self.extra_vars.get('glossary', None),
                                                                      alphas=alphas,
                                                                      x_text=sources,
                                                                      heuristic=heuristic,
@@ -711,45 +814,52 @@ class Sample(KerasCallback):
                                                          self.index2word_y,
                                                          self.sampling_type,
                                                          verbose=self.verbose)
-                    truths = decode_predictions_one_hot(truths, self.index2word_y, verbose=self.verbose)
+                    truths = decode_predictions_one_hot(truths, self.index2word_y,
+                                                        verbose=self.verbose)
 
                     # Apply detokenization function if needed
                     if self.extra_vars.get('apply_detokenization', False):
                         if self.print_sources:
-                            sources = map(self.extra_vars['detokenize_f'], sources)
-                        predictions = map(self.extra_vars['detokenize_f'], predictions)
-                        truths = map(self.extra_vars['detokenize_f'], truths)
+                            sources = list(map(self.extra_vars['detokenize_f'], sources))
+                        predictions = list(map(self.extra_vars['detokenize_f'], predictions))
+                        truths = list(map(self.extra_vars['detokenize_f'], truths))
 
                 # Write samples
                 if self.print_sources:
                     # Write samples
                     for i, (source, sample, truth) in list(enumerate(zip(sources, predictions, truths))):
-                        print("Source     (%d): %s" % (i, str(source.encode('utf-8'))))
-                        print("Hypothesis (%d): %s" % (i, str(sample.encode('utf-8'))))
-                        print("Reference  (%d): %s" % (i, str(truth.encode('utf-8'))))
+                        if sys.version_info.major == 2:
+                            source = str(source.encode('utf-8'))
+                            sample = str(sample.encode('utf-8'))
+                            truth = str(truth.encode('utf-8'))
+                        print("Source     (%d): %s" % (i, source))
+                        print("Hypothesis (%d): %s" % (i, sample))
+                        print("Reference  (%d): %s" % (i, truth))
                         print("")
                 else:
                     for i, (sample, truth) in list(enumerate(zip(predictions, truths))):
-                        print("Hypothesis (%d): %s" % (i, str(sample.encode('utf-8'))))
-                        print("Reference  (%d): %s" % (i, str(truth.encode('utf-8'))))
+                        if sys.version_info.major == 2:
+                            sample = str(sample.encode('utf-8'))
+                            truth = str(truth.encode('utf-8'))
+                        print("Hypothesis (%d): %s" % (i, sample))
+                        print("Reference  (%d): %s" % (i, truth))
                         print("")
 
 
 SampleEachNUpdates = Sample
 
 
-###################################################
 # Learning modifiers callbacks
-###################################################
 class EarlyStopping(KerasCallback):
     """
-    Applies early stopping if performance has not improved for some epochs.
+    Applies early stopping if performance has not improved for some evaluations.
     """
 
     def __init__(self,
                  model,
                  patience=0,
                  check_split='val',
+                 min_delta=0.,
                  metric_check='acc',
                  want_to_minimize=False,
                  eval_on_epochs=True,
@@ -760,6 +870,7 @@ class EarlyStopping(KerasCallback):
         :param model: model to check performance
         :param patience: number of beginning epochs without reduction; by default 0 (disabled)
         :param check_split: data split used to check metric value improvement
+        :param min_delta: minimum change in the monitored quantity to qualify as an improvement
         :param metric_check: name of the metric to check
         :param verbose: verbosity level; by default 1
         """
@@ -767,11 +878,14 @@ class EarlyStopping(KerasCallback):
         self.model_to_eval = model
         self.patience = patience
         self.check_split = check_split
+        self.min_delta = min_delta
         self.metric_check = metric_check
         self.eval_on_epochs = eval_on_epochs
         self.start_eval_on_epoch = start_eval_on_epoch
         self.each_n_epochs = each_n_epochs
         self.want_to_minimize = want_to_minimize
+        if self.want_to_minimize:
+            self.min_delta *= -1.
 
         self.verbose = verbose
         self.cum_update = 0
@@ -794,7 +908,13 @@ class EarlyStopping(KerasCallback):
             self.best_epoch = -1
             self.wait = 0
 
-    def on_epoch_end(self, epoch, logs={}):
+    def on_epoch_end(self, epoch, logs=None):
+        """
+        Increment the epoch counter. Evaluate if necessary.
+        :param epoch:
+        :param logs:
+        :return:
+        """
         epoch += 1  # start by index 1
         self.epoch = epoch
         if not self.eval_on_epochs:
@@ -803,7 +923,13 @@ class EarlyStopping(KerasCallback):
             return
         self.evaluate(self.epoch, counter_name='epoch')
 
-    def on_batch_end(self, n_update, logs={}):
+    def on_batch_end(self, n_update, logs=None):
+        """
+        Increment the update counter. Evaluate if necessary.
+        :param n_update:
+        :param logs:
+        :return:
+        """
         self.cum_update += 1  # start by index 1
         if self.eval_on_epochs:
             return
@@ -814,50 +940,68 @@ class EarlyStopping(KerasCallback):
         self.evaluate(self.cum_update, counter_name='update')
 
     def evaluate(self, epoch, counter_name='epoch'):
+        """
+        Get the model evaluation and check for the early stopping conditions.
+        :param epoch: Epoch or update number.
+        :param counter_name: 'epoch' or 'update', for consistent logging.
+        :return:
+        """
         current_score = self.model_to_eval.getLog(self.check_split, self.metric_check)[-1]
         # Get last metric value from logs
         if current_score is None:
-            warnings.warn('The chosen metric ' + str(self.metric_check) +
-                          ' does not exist; the EarlyStopping callback works only with a valid metric.')
+            warnings.warn('The chosen metric ' + str(self.metric_check) + ' does not exist; the EarlyStopping callback works only with a valid metric.')
             return
         if self.want_to_minimize:
             current_score = -current_score
         # Check if the best score has been outperformed in the current epoch
-        if current_score > self.best_score:
+        if current_score - self.min_delta > self.best_score:
             self.best_epoch = epoch
             self.best_score = current_score
             self.wait = 0
             if self.verbose > 0:
-                logging.info('---current best %s %s: %.3f' % (self.check_split, self.metric_check,
-                                                              current_score if not self.want_to_minimize
-                                                              else -current_score))
+                logger.info('---current best %s %s: %.3f' % (self.check_split, self.metric_check, current_score if not self.want_to_minimize else -current_score))
 
         # Stop training if performance has not improved for self.patience epochs
         elif self.patience > 0:
             self.wait += 1
-            logging.info('---bad counter: %d/%d' % (self.wait, self.patience))
+            logger.info('---bad counter: %d/%d' % (self.wait, self.patience))
             if self.wait >= self.patience:
                 if self.verbose > 0:
-                    logging.info("---%s %d: early stopping. Best %s found at %s %d: %f" % (
-                        str(counter_name), epoch, self.metric_check, str(counter_name), self.best_epoch,
-                        self.best_score if not self.want_to_minimize else -self.best_score))
+                    logger.info(
+                        "---%s %d: early stopping. Best %s found at %s %d: %f" % (
+                            str(counter_name), epoch, self.metric_check,
+                            str(counter_name), self.best_epoch,
+                            self.best_score if not self.want_to_minimize else -self.best_score))
                 self.model.stop_training = True
                 exit(1)
 
 
 class LearningRateReducer(KerasCallback):
-    def __init__(self, initial_lr=1., reduce_rate=0.99, reduce_each_epochs=True, reduce_frequency=1, start_reduction_on_epoch=0,
-                 exp_base=0.5, half_life=50000, warmup_exp=-1.5, reduction_function='linear', epsilon=1e-11, verbose=1):
-        """
-        Reduces learning rate during the training.
-        Two different decays are implemented:
-            * linear:
-                lr = reduce_rate * lr
-            * exponential:
-                lr = exp_base**{current_step / half_life) * reduce_rate * lr
-            * noam:
-                lr = initial_lr * min(current_step**exp_base, current_step * half_life ** warmup_exp)
+    """
+    Reduces learning rate during the training.
+    Three different decays are implemented:
+        * linear:
+            lr = reduce_rate * lr
+        * exponential:
+            lr = exp_base**{current_step / half_life) * reduce_rate * lr
+        * noam:
+            lr = initial_lr * min(current_step**exp_base, current_step * half_life ** warmup_exp)
 
+    """
+    def __init__(self,
+                 initial_lr=1.,
+                 reduce_rate=0.99,
+                 reduce_each_epochs=True,
+                 reduce_frequency=1,
+                 start_reduction_on_epoch=0,
+                 exp_base=0.5,
+                 half_life=50000,
+                 warmup_exp=-1.5,
+                 reduction_function='linear',
+                 epsilon=1e-11,
+                 min_lr=1e-9,
+                 verbose=1):
+        """
         :param initial_lr: Initial learning rate.
         :param reduce_rate: Reduction rate.
         :param reduce_each_epochs: Whether we reduce each epochs or each updates.
@@ -867,6 +1011,7 @@ class LearningRateReducer(KerasCallback):
         :param half_life: Half-life for exponential reduction.
         :param reduction_function: Either 'linear' or 'exponential' reduction.
         :param epsilon: Stop training if LR is below this value
+        :param min_lr: Minimum LR allowed
         :param verbose: Be verbose.
         """
 
@@ -886,11 +1031,17 @@ class LearningRateReducer(KerasCallback):
         self.epsilon = epsilon
         self.epoch = 0
         self.new_lr = None
-        assert self.reduction_function in ['linear', 'exponential', 'noam'], 'Reduction function "%s" unimplemented!' % \
-                                                                     str(self.reduction_function)
+        self.min_lr = np.float32(min_lr)
+        if self.reduction_function not in ['linear', 'exponential', 'noam']:
+            raise AssertionError('Reduction function "%s" unimplemented!' % str(self.reduction_function))
 
-    def on_epoch_end(self, epoch, logs={}):
-
+    def on_epoch_end(self, epoch, logs=None):
+        """
+        Apply after each epoch.
+        :param epoch:
+        :param logs:
+        :return:
+        """
         if not self.reduce_each_epochs:
             return
         elif (epoch - self.start_reduction_on_epoch) % self.reduce_frequency != 0:
@@ -899,11 +1050,16 @@ class LearningRateReducer(KerasCallback):
 
         if float(self.new_lr) <= self.epsilon:
             if self.verbose > 0:
-                logging.info('Learning rate too small, learning stops now')
+                logger.info('Learning rate too small, learning stops now')
             self.model.stop_training = True
 
-    def on_batch_end(self, n_update, logs={}):
-
+    def on_batch_end(self, n_update, logs=None):
+        """
+        On batch end, n_update is restarted at the beginning of each epoch. We carry the absolute update count in self.current_update_nb
+        :param n_update:
+        :param logs:
+        :return:
+        """
         self.current_update_nb += 1
         if self.reduce_each_epochs:
             return
@@ -913,25 +1069,33 @@ class LearningRateReducer(KerasCallback):
             return
         self.reduce_lr(self.current_update_nb)
 
-    def reduce_lr(self, current_nb):
+    def reduce_lr(self, n_update):
+        """
+        Learning rate reducer.
+        :param n_update: Current update
+        :return:
+        """
         if self.reduction_function == 'linear':
             new_rate = self.reduce_rate
         elif self.reduction_function == 'exponential':
-            new_rate = np.power(self.exp_base, current_nb / self.half_life) * self.reduce_rate
+            new_rate = np.power(self.exp_base,
+                                n_update / self.half_life) * self.reduce_rate
         elif self.reduction_function == 'noam':
-            new_rate = np.float32(min(float(current_nb)** self.exp_base,
-                                  float(current_nb) * self.half_life ** self.warmup_exp))
+            new_rate = np.float32(min(float(n_update) ** self.exp_base,
+                                      float(
+                                          n_update) * self.half_life ** self.warmup_exp))
 
         else:
-            raise NotImplementedError('The decay function %s is not implemented.' % str(self.reduction_function))
+            raise NotImplementedError(
+                'The decay function %s is not implemented.' % str(
+                    self.reduction_function))
 
         if self.reduction_function == 'noam':
             lr = self.initial_lr
         else:
-            lr = self.model.optimizer.lr.get_value()
-        self.new_lr = np.float32(lr * new_rate)
-
+            lr = K.get_value(self.model.optimizer.lr)
+        self.new_lr = np.maximum(np.float32(lr * new_rate), self.min_lr)
         K.set_value(self.model.optimizer.lr, self.new_lr)
 
         if self.reduce_each_epochs and self.verbose > 0:
-            logging.info("LR reduction from {0:0.6f} to {1:0.6f}".format(float(lr), float(self.new_lr)))
+            logger.info("LR reduction from {0:0.6f} to {1:0.6f}".format(float(lr), float(self.new_lr)))
